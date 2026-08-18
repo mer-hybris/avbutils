@@ -1,0 +1,14 @@
+# The images list defines each input image
+[[images]]
+# image is the path relative to the base path provided with --images-path
+image = "hybris-boot.img"
+# partition is the partition name associated with the image
+partition = "boot"
+
+[[images]]
+image = "vendor_boot.img"
+partition = "vendor_boot"
+
+[[images]]
+image = "dtbo.img"
+partition = "dtbo"

@@ -31,6 +31,8 @@ install -D -m 755 genvbmeta -t %{buildroot}/%{_bindir}
 install -D -m 755 avbpubkey2c -t %{buildroot}/%{_bindir}
 
 %files
+%doc README.md
+%doc images_example.toml
 %license LICENSES/BSD-3-Clause.txt
 %{_bindir}/genvbmeta
 %{_bindir}/avbpubkey2c
