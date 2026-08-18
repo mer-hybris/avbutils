@@ -18,6 +18,9 @@ Requires: python3-base
 
 BuildArch: noarch
 
+%undefine _enable_debug_packages
+%define disable_docs_package 1
+
 %description
 %{summary}.
 
