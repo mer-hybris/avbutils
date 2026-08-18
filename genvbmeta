@@ -1,0 +1,168 @@
+#!/usr/bin/python3
+
+# SPDX-FileCopyrightText: 2026 Jolla Mobile Ltd
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+from pathlib import Path
+import argparse
+import contextlib
+import gzip
+import hashlib
+import logging
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+
+
+log = logging.getLogger()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description="Generates vbmeta for set of images",
+    )
+    parser.add_argument(
+        "--images",
+        "-i",
+        metavar="images.toml",
+        default="images.toml",
+        help="Toml file containing the image definitions",
+    )
+    parser.add_argument(
+        "--images-path",
+        "-p",
+        default=".",
+        type=Path,
+        help="Base path for the images",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        default="vbmeta.img",
+        type=Path,
+        help="Output path for the vbmeta image",
+    )
+    parser.add_argument(
+        "--private-key",
+        "-k",
+        default="private_key.pem",
+        type=Path,
+        help="Private key used for signing",
+    )
+    parser.add_argument("--debug", "-d", action="store_true")
+    args = parser.parse_args()
+    logging.basicConfig(
+        format="%(levelname)s: %(message)s",
+        level=logging.DEBUG if args.debug else logging.INFO,
+    )
+    return args
+
+
+def main():
+    args = parse_args()
+
+    with open(args.images, "rb") as fd:
+        images = tomllib.load(fd)["images"]
+
+    with make_workdir() as workdir:
+        descriptors = []
+        for entry in images:
+            image = args.images_path / entry["image"]
+            if not image.exists():
+                log.error(f"{image} does not exists")
+                return 1
+            output = process_image(workdir, image, entry["partition"])
+            descriptors.append(output)
+
+        command = [
+            "avbtool", "make_vbmeta_image",
+            "--algorithm", "SHA256_RSA2048",
+            "--padding_size", "4096",
+            "--rollback_index", "0",
+            "--output", str(args.output),
+            "--key",  str(args.private_key),
+        ]  # fmt: skip
+        for desc in descriptors:
+            command.extend(["--include_descriptors_from_image", str(desc)])
+        args.output.parent.mkdir(exist_ok=True, parents=True)
+        run_command(command, check=True)
+    log.info("Done: %s", args.output)
+
+
+def process_image(workdir: Path, image: Path, partition: str):
+    log.info("Processing %s ...", image)
+    if image.suffix != ".img":
+        image = extract_image(workdir, image)
+
+    erase_footer(image)
+
+    output = workdir / image.with_suffix(".vbmeta").name
+    salt = calc_hash(image)
+
+    command = [
+        "avbtool", "add_hash_footer",
+        "--dynamic_partition_size",
+        "--do_not_append_vbmeta_image",
+        "--salt", salt,
+        "--image", str(image),
+        "--partition_name", partition,
+        "--output_vbmeta_image", str(output),
+    ]  # fmt: skip
+    run_command(command, check=True)
+    return output
+
+
+@contextlib.contextmanager
+def make_workdir():
+    workdir = Path(tempfile.mkdtemp(prefix="genvbmeta-", dir="."))
+    log.info(f"Workdir: {workdir}")
+    try:
+        yield workdir
+    finally:
+        shutil.rmtree(workdir)
+
+
+def calc_hash(image: Path) -> str:
+    hash = hashlib.sha256()
+    with image.open("rb") as fd:
+        while chunk := fd.read(1024):
+            hash.update(chunk)
+    return hash.digest().hex()
+
+
+def extract_image(workdir: Path, compressed: Path) -> Path:
+    if compressed.suffix != ".gz":
+        raise Exception(f"Unknown image compression: {compressed.name}")
+    log.info("Extracting %s ...", compressed)
+    image = workdir / compressed.with_suffix("").name
+    with compressed.open("rb") as src, image.open("wb") as dest:
+        gz = gzip.GzipFile(fileobj=src)
+        while chunk := gz.read(1024):
+            dest.write(chunk)
+    return image
+
+
+def erase_footer(image: Path):
+    p = run_command(
+        ["avbtool", "info_image", "--image", str(image)],
+        capture_output=True,
+    )
+    if p.returncode != 0:
+        # does not look like a vbmeta image...
+        return
+    log.info("Erasing footer %s ...", image)
+    run_command(["avbtool", "erase_footer", "--image", str(image)], check=True)
+
+
+def run_command(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+    log.debug(shlex.join(command))
+    return subprocess.run(command, **kwargs)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
