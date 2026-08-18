@@ -1,0 +1,53 @@
+#!/usr/bin/python3
+
+# SPDX-FileCopyrightText: 2026 Jolla Mobile Ltd
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+import argparse
+import itertools
+import os
+import struct
+import subprocess
+import tempfile
+
+
+parser = argparse.ArgumentParser(
+    description="Extracts public key into format suitable for C array"
+)
+arg_group = parser.add_mutually_exclusive_group(required=True)
+arg_group.add_argument(
+    "--private-key",
+    "-k",
+    help="Private key to extract the public key from",
+)
+arg_group.add_argument(
+    "--avb-public-key",
+    "-a",
+    help="Public key already extracted with avbtool extract_public_key",
+)
+args = parser.parse_args()
+
+if args.avb_public_key:
+    avbkey = open(args.avb_public_key, "rb").read()
+else:
+    fd, tmp = tempfile.mkstemp()
+    os.close(fd)
+    subprocess.run([
+        "avbtool", "extract_public_key",
+        "--key", args.private_key,
+        "--output", tmp,
+    ])  # fmt: skip
+    avbkey = open(tmp, "rb").read()
+    os.unlink(tmp)
+
+header = avbkey[:8]
+size_bits, _ = struct.unpack(">II", header)
+size = size_bits // 8
+
+key = avbkey[8 : 8 + size]
+
+for row in itertools.batched(key, 8):
+    for b in row:
+        print(f"0x{b:02X}", end=", ")
+    print()
