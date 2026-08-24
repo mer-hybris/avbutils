@@ -96,10 +96,8 @@ def main():
 
 def process_image(workdir: Path, image: Path, partition: str):
     log.info("Processing %s ...", image)
-    if image.suffix != ".img":
-        image = extract_image(workdir, image)
-
-    erase_footer(image)
+    image = extract_image(workdir, image)
+    image = erase_footer(workdir, image)
 
     output = workdir / image.with_suffix(".vbmeta").name
     salt = calc_hash(image)
@@ -119,7 +117,7 @@ def process_image(workdir: Path, image: Path, partition: str):
 
 @contextlib.contextmanager
 def make_workdir():
-    workdir = Path(tempfile.mkdtemp(prefix="genvbmeta-", dir="."))
+    workdir = Path(tempfile.mkdtemp(prefix="genvbmeta-", dir=".")).resolve()
     log.info(f"Workdir: {workdir}")
     try:
         yield workdir
@@ -136,6 +134,8 @@ def calc_hash(image: Path) -> str:
 
 
 def extract_image(workdir: Path, compressed: Path) -> Path:
+    if compressed.suffix == ".img":
+        return compressed
     if compressed.suffix != ".gz":
         raise Exception(f"Unknown image compression: {compressed.name}")
     log.info("Extracting %s ...", compressed)
@@ -147,16 +147,20 @@ def extract_image(workdir: Path, compressed: Path) -> Path:
     return image
 
 
-def erase_footer(image: Path):
+def erase_footer(workdir: Path, image: Path) -> Path:
     p = run_command(
         ["avbtool", "info_image", "--image", str(image)],
         capture_output=True,
     )
     if p.returncode != 0:
         # does not look like a vbmeta image...
-        return
+        return image
+    if workdir not in image.parents:
+        shutil.copy(image, workdir)
+        image = workdir / image.name
     log.info("Erasing footer %s ...", image)
     run_command(["avbtool", "erase_footer", "--image", str(image)], check=True)
+    return image
 
 
 def run_command(command: list[str], **kwargs) -> subprocess.CompletedProcess:
